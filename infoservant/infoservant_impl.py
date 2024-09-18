@@ -19,50 +19,31 @@ def _call_gpt(
     elif isinstance(conversation, dict):
         conversation = [conversation]
 
-    answer_full = ""
-    while True:
-        LOGGER.debug(
-            f"infoservant._call_gpt calling chat completion "
-            f"with conversation of {len(conversation)} messages. "
-            f"Last message is {len(conversation[-1]['content'])} chars long."
+    LOGGER.debug(
+        f"infoservant._call_gpt calling chat completion "
+        f"with conversation of {len(conversation)} messages. "
+        f"Last message is {len(conversation[-1]['content'])} chars long."
+    )
+
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=conversation,
+        temperature=0,
+    )
+
+    answer = completion.choices[0].message.content
+
+    LOGGER.debug(f"infoservant._call_gpt got answer of length {len(answer)}")
+
+    if completion.choices[0].finish_reason == "length":
+        LOGGER.debug(f"infoservant._call_gpt answer truncated")
+        answer += (
+            "\n\n...(There is more material to cover, but this response is already "
+            "excessively lengthy. As such, I have to stop here for now.)"
         )
 
-        completion = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=conversation,
-            temperature=0,
-        )
-
-        answer = completion.choices[0].message.content
-        answer_full += answer + "\n"
-
-        LOGGER.debug(
-            f"infoservant._call_gpt got answer of length {len(answer)}, "
-            f"appending to full answer currently at length {len(answer_full)}"
-        )
-
-        conversation.append(
-            {
-                "role": "assistant",
-                "content": answer,
-            }
-        )
-
-        if completion.choices[0].finish_reason == "length":
-            conversation.append(
-                {
-                    "role": "user",
-                    "content": "Please continue from where you left off.",
-                }
-            )
-
-            LOGGER.debug("infoservant._call_gpt finish reason length, continuing loop")
-            continue
-
-        break
-
-    answer_full = answer_full.strip()
-    return answer_full
+    answer = answer.strip()
+    return answer
 
 
 def infoservant(
