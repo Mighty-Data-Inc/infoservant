@@ -56,6 +56,8 @@ def infoservant(
 
 def main():
     import argparse
+    import dotenv
+    import os
 
     parser = argparse.ArgumentParser(
         description=(
@@ -106,10 +108,18 @@ def main():
         log_level = logging.getLevelName(log_level)
         LOGGER.setLevel(log_level)
 
+    dotenv.load_dotenv()
+
+    openai_api_key = (args.key or os.getenv("OPENAI_API_KEY") or "",)
+    openai_org_id = args.org or os.getenv("OPENAI_ORGANIZATION_ID") or None
+    openai_client = openai.OpenAI(api_key=openai_api_key, organization=openai_org_id)
+
+    serpapi_key = args.serpapi or os.getenv("SERPAPI_KEY") or ""
+
     s = infoservant(
-        openai_api_key=args.key,
-        openai_org_id=args.org,
-        serp_api_key=args.serpapi or "",
+        command=args.command,
+        openai_client=openai_client,
+        serp_api_key=serpapi_key,
     )
     print(s)
 

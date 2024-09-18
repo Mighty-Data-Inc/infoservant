@@ -12,12 +12,13 @@ setup(
     packages=find_packages(),
     install_requires=[
         "openai",
+        "python-dotenv",
         "serpapi",
         "webpage2content",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: Apache 2.0 License",
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.9",
