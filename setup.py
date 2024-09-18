@@ -19,9 +19,9 @@ setup(
     url="https://github.com/Mighty-Data-Inc/infoservant",
     packages=find_packages(),
     install_requires=[
+        "google-search-results",
         "openai",
         "python-dotenv",
-        "serpapi",
         "webpage2content",
     ],
     classifiers=[
