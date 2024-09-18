@@ -51,7 +51,8 @@ def infoservant(
     openai_client: openai.OpenAI,
     serp_api_key: str = "",
 ):
-    print("Hello World")
+    retval = "Hello World"
+    return retval
 
 
 def main():
@@ -59,11 +60,23 @@ def main():
     import dotenv
     import os
 
+    # Read the version from the VERSION file
+    with open(os.path.join(os.path.dirname(__file__), "VERSION"), "r") as version_file:
+        version = version_file.read().strip()
+
     parser = argparse.ArgumentParser(
         description=(
             "An AI that browses text content on the web. Easily integrate intelligent web surfing into any project."
         )
     )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {version}",
+        help="Show the version number and exit.",
+    )
+
     parser.add_argument(
         "-l",
         "--log-level",
@@ -91,6 +104,7 @@ def main():
         help="SerpApi key. If not provided, will run without SerpApi capabilities.",
         type=str,
     )
+
     parser.add_argument(
         "-c",
         "--command",
@@ -102,22 +116,35 @@ def main():
         type=str,
     )
 
+    parser.add_argument(
+        "command_arg",
+        help="Same as --command, but invoked positionally.",
+        type=str,
+        nargs="?",
+    )
+
     args = parser.parse_args()
 
     if args.log_level:
-        log_level = logging.getLevelName(log_level)
+        log_level = logging.getLevelName(args.log_level)
         LOGGER.setLevel(log_level)
 
     dotenv.load_dotenv()
 
-    openai_api_key = (args.key or os.getenv("OPENAI_API_KEY") or "",)
-    openai_org_id = args.org or os.getenv("OPENAI_ORGANIZATION_ID") or None
+    openai_api_key = args.key or os.getenv("OPENAI_API_KEY")
+    openai_org_id = args.org or os.getenv("OPENAI_ORGANIZATION_ID")
+    command = args.command or args.command_arg
+    serpapi_key = args.serpapi or os.getenv("SERPAPI_KEY")
+
+    if not command:
+        parser.error("Command is required.")
+    if not openai_api_key:
+        parser.error("OpenAI API key is required.")
+
     openai_client = openai.OpenAI(api_key=openai_api_key, organization=openai_org_id)
 
-    serpapi_key = args.serpapi or os.getenv("SERPAPI_KEY") or ""
-
     s = infoservant(
-        command=args.command,
+        command=command,
         openai_client=openai_client,
         serp_api_key=serpapi_key,
     )

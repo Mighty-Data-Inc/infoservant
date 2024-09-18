@@ -1,4 +1,4 @@
-from .webpage2content_impl import webpage2content
+from .infoservant_impl import infoservant
 
 # Apparently, you're not supposed to make the module callable.
 # A thing that you do all the time in NodeJS is apparently a huuuuuuuge no-no
