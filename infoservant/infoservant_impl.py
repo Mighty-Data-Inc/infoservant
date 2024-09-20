@@ -307,7 +307,6 @@ def _run_one_research_task(
             task["error"] = "SerpApi params not provided"
             return False
         try:
-            print(serpapi_params)
             search = serpapi.GoogleSearch(serpapi_params)
             result = search.get_dict()
         except Exception as ex:
@@ -327,12 +326,49 @@ def _run_one_research_task(
         for field in CLEANUP_FIELDS:
             if field in result:
                 del result[field]
-        print(json.dumps(result, indent=2))
         task["success"] = True
-        task["result"] = result
+        task["result"] = json.dumps(result, indent=2)
         return True
 
     return False
+
+
+def _task_results_to_conversation_messages(tasks: List[dict]):
+    messages = []
+
+    for task in tasks:
+        task_type = task.get("task_type")
+
+        task_success = task.get("success") == True
+        task_result = task.get("result")
+        task_error = task.get("error")
+
+        message = ""
+        if task_type == "url":
+            url = task.get("url")
+            message = f"You browsed URL: {url}\n"
+        elif task_type == "serpapi_call":
+            serpapi_params = task.get("params")
+            message = (
+                f"You called SerpApi with these parameters:\n"
+                f"{json.dumps(serpapi_params, indent=2)}\n"
+            )
+        if not task_success:
+            message += f"The call failed with the following error:\n{task_error}"
+        else:
+            message += "The call succeeded with the following results:\n\n---\n\n"
+            message += task_result
+
+        messages.append({"role": "system", "content": message})
+
+    return messages
+
+
+def _summarize_progress_so_far(
+    conversation: List[dict],
+    openai_client: openai.OpenAI,
+):
+    conversation.append({"role": "system", "content": ("Write a ")})
 
 
 def _research_cycle(
@@ -444,12 +480,39 @@ def _research_cycle(
             }
             tasks.append(task)
 
+    # TODO: Run these concurrently.
     for task in tasks:
         _run_one_research_task(
             task=task,
             openai_client=openai_client,
         )
-    print(json.dumps(tasks, indent=2))
+
+    result_msgs = _task_results_to_conversation_messages(tasks)
+    conversation.extend(result_msgs)
+
+    conversation.append(
+        {
+            "role": "system",
+            "content": (
+                "Write a comprehensive report about what you've done so far, what you've learned "
+                "from your web browsing, and how it relates to the user's initial command or "
+                "inquiry. Note the searches you've conducted (if any), the pages you've visited "
+                "(if any), the information you've gathered, and which pages specific important "
+                "pieces of information or significant quotes or block-quotes came from. This "
+                'report should essentially present a complete "state dump", such that, if '
+                "someone else were to try to continue this research from where you've left off, "
+                "they'll have everything they need to reestablish your current informational "
+                "context."
+            ),
+        }
+    )
+    _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    print(conversation[-1]["content"])
+
+    print(json.dumps(result_msgs, indent=2))
     exit(0)
 
     pass
