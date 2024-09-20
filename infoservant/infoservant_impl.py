@@ -360,9 +360,36 @@ def _research_cycle(
         response_format={"type": "json_object"},
     )
     str_nextstep_json = completion.choices[0].message.content
-    nextstep_json = json.loads(str_nextstep_json)
+    nextsteps: List[dict] = json.loads(str_nextstep_json)
 
-    print(json.dumps(nextstep_json, indent=2))
+    tasks = []
+    if "urls_to_visit" in nextsteps and type(nextsteps["urls_to_visit"]) == list:
+        for item in nextsteps["urls_to_visit"]:
+            tasks.append({"task_type": "url", "url": item})
+
+    if (
+        serp_api_key
+        and ("serpapi_calls" in nextsteps)
+        and type(nextsteps["serpapi_calls"]) == list
+    ):
+        for item in nextsteps["serpapi_calls"]:
+            item.update(
+                {
+                    "api_key": serp_api_key,
+                    "num": 5,
+                    "no_cache": True,
+                    "output": "json",
+                }
+            )
+            if "engine" not in item:
+                item["engine"] = "google"
+            task = {
+                "task_type": "serpapi_call",
+                "params": item,
+            }
+            tasks.append(task)
+
+    print(json.dumps(tasks, indent=2))
     exit(0)
 
     pass
