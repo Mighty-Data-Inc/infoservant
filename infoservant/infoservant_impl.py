@@ -17,8 +17,8 @@ JSON_COFFEE_SAMPLE = {
     ],
     "serpapi_calls": [
         {"q": "history of coffee"},
-        {"q": "news about coffee", "engine": "google_news"},
-        {"q": "buy coffee beans", "engine": "google_shopping"},
+        {"q": "news about coffee", "tbm": "nws"},
+        {"q": "buy coffee beans", "tbm": "shop"},
     ],
 }
 
@@ -275,7 +275,64 @@ def _run_one_research_task(
     task: dict,
     openai_client: openai.OpenAI,
 ):
-    pass
+    task_type = task.get("task_type")
+
+    if task_type == "url":
+        url = task.get("url")
+        if not url:
+            task["success"] = False
+            task["error"] = "URL not provided"
+            return False
+        try:
+            result = webpage2content.webpage2content(
+                url=url,
+                openai_client=openai_client,
+            )
+        except Exception as ex:
+            task["success"] = False
+            task["error"] = f"Exception while fetching url {url}: {ex}"
+            return False
+        if not result:
+            task["success"] = False
+            task["error"] = f"Fetch of {url} produced empty/invalid result"
+            return False
+        task["success"] = True
+        task["result"] = result
+        return True
+
+    if task_type == "serpapi_call":
+        serpapi_params = task.get("params")
+        if not serpapi_params:
+            task["success"] = False
+            task["error"] = "SerpApi params not provided"
+            return False
+        try:
+            print(serpapi_params)
+            search = serpapi.GoogleSearch(serpapi_params)
+            result = search.get_dict()
+        except Exception as ex:
+            task["success"] = False
+            task["error"] = f"Exception while performing SerpApi query: {ex}"
+            return False
+        CLEANUP_FIELDS = [
+            "pagination",
+            "serpapi_pagination",
+            "filters",
+            "search_metadata",
+            "search_parameters_xxxxxx",
+            "search_information",
+            "knowledge_graph",
+            "inline_videos",
+        ]
+        for field in CLEANUP_FIELDS:
+            if field in result:
+                del result[field]
+        print(json.dumps(result, indent=2))
+        task["success"] = True
+        task["result"] = result
+        return True
+
+    return False
 
 
 def _research_cycle(
@@ -336,11 +393,11 @@ def _research_cycle(
     if serp_api_key:
         instructions_str += (
             'The JSON structure will also have a field called "serpapi_calls", which will have '
-            "a list of objects that contain the parameters of SerpApi calls. Don't worry about "
-            "the `api_key` field of the SerpApi calls; the parsing engine will populate it for "
-            "you as it reads your JSON output. You just focus on the URLs to visit and the "
-            "parameters of the SerpApi calls to make. Don't issue more than 3 SerpApi calls "
-            "at a time.\n"
+            "a list of objects that contain the parameters of SerpApi calls "
+            "(using engine=google). Don't worry about the `api_key` field of the SerpApi calls; "
+            "the parsing engine will populate it for you as it reads your JSON output. You just "
+            "focus on the URLs to visit and the parameters of the SerpApi calls to make. Don't "
+            "issue more than 3 SerpApi calls at a time.\n"
             "\n"
         )
     instructions_str += (
@@ -381,14 +438,17 @@ def _research_cycle(
                     "output": "json",
                 }
             )
-            if "engine" not in item:
-                item["engine"] = "google"
             task = {
                 "task_type": "serpapi_call",
                 "params": item,
             }
             tasks.append(task)
 
+    for task in tasks:
+        _run_one_research_task(
+            task=task,
+            openai_client=openai_client,
+        )
     print(json.dumps(tasks, indent=2))
     exit(0)
 
