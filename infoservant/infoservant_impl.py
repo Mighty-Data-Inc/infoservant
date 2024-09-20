@@ -327,8 +327,11 @@ def _research_cycle(
     if not serp_api_key:
         del json_sample["serpapi_calls"]
     instructions_str = (
-        "Okay, now emit a JSON structure to express these next steps. The JSON structure will "
-        'have a field called "urls_to_visit", containing a list of strings.\n\n'
+        "Okay, now emit a JSON structure to express these next steps.\n"
+        "\n"
+        'The JSON structure will have a field called "urls_to_visit", containing a list of '
+        "strings representing URLs to visit. Don't order more than 5 such URLS at a time.\n"
+        "\n"
     )
     if serp_api_key:
         instructions_str += (
@@ -336,15 +339,19 @@ def _research_cycle(
             "a list of objects that contain the parameters of SerpApi calls. Don't worry about "
             "the `api_key` field of the SerpApi calls; the parsing engine will populate it for "
             "you as it reads your JSON output. You just focus on the URLs to visit and the "
-            "parameters of the SerpApi calls to make.\n\n"
+            "parameters of the SerpApi calls to make. Don't issue more than 3 SerpApi calls "
+            "at a time.\n"
+            "\n"
         )
     instructions_str += (
         "Imagine the user asks for information about coffee. Then "
         "the JSON might look something like this:\n\n"
         "```json\n"
         f"{json.dumps(json_sample, indent=2)}\n"
-        "```"
+        "```\n"
     )
+
+    conversation.append({"role": "system", "content": instructions_str})
 
     completion = openai_client.chat.completions.create(
         model="gpt-4o",
@@ -355,7 +362,7 @@ def _research_cycle(
     str_nextstep_json = completion.choices[0].message.content
     nextstep_json = json.loads(str_nextstep_json)
 
-    print(str_nextstep_json)
+    print(json.dumps(nextstep_json, indent=2))
     exit(0)
 
     pass
