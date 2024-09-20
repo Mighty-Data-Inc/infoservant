@@ -10,6 +10,18 @@ from typing import Optional, Union, List
 
 LOGGER = logging.getLogger("infoservant")
 
+JSON_COFFEE_SAMPLE = {
+    "urls_to_visit": [
+        "http://www.coffee.com",
+        "https://wikipedia.com/coffee",
+    ],
+    "serpapi_calls": [
+        {"q": "history of coffee"},
+        {"q": "news about coffee", "engine": "google_news"},
+        {"q": "buy coffee beans", "engine": "google_shopping"},
+    ],
+}
+
 
 def _chronometer() -> str:
     now = datetime.datetime.utcnow()
@@ -259,29 +271,46 @@ def _estimate_reasonable_time(
     return timedur_est
 
 
+def _run_one_research_task(
+    task: dict,
+    openai_client: openai.OpenAI,
+):
+    pass
+
+
 def _research_cycle(
     convo_intro: List[dict],
     time_start: float,
     pages_explored: List[dict],
     searches_conducted: List[dict],
     openai_client: openai.OpenAI,
+    serp_api_key: str = "",
 ):
     # Deep-copy so we don't affect the "real" conversation object.
     conversation: List[dict] = json.loads(json.dumps(convo_intro))
 
+    time_now = time.time()
+    time_spent = time_now - time_start
     conversation.append(
         {
             "role": "system",
-            "content": _chronometer(),
+            "content": (
+                f"{_chronometer()}\n"
+                "\n"
+                f"You've been working for {time_spent} seconds so far."
+            ),
         }
     )
 
+    s = ""
+    if serp_api_key:
+        s = "What search queries will you conduct?"
     conversation.append(
         {
             "role": "system",
             "content": (
                 "From here, list your next actions as a text-browsing web bot. "
-                "What URLs will you visit? What search queries will you conduct?\n"
+                f"What URLs will you visit? {s}\n"
                 "\n"
                 "Don't write any code or JSON yet. Write your output in plain English. "
                 "For now, we're just brainstorming."
@@ -294,43 +323,27 @@ def _research_cycle(
         openai_client=openai_client,
     )
 
-    conversation.append(
-        {
-            "role": "system",
-            "content": """
-Okay, now please go ahead and emit a JSON structure that will execute these next steps. The JSON
-structure will have a "urls_to_visit" list of strings, and a "serpapi_calls" list of objects that
-contain the parameters of SerpApi calls. Imagine the user asks for information about coffee. Then
-the JSON might look something like this:
-
-```json
-{
-  "urls_to_visit": [
-    "http://www.coffee.com",
-    "https://wikipedia.com/coffee",
-    ...
-  ],
-  "serpapi_calls": [
-    {
-      "q": "history of coffee"
-    },
-    {
-      "q": "news about coffee",
-      "engine": "google_news"
-    },
-    {
-      "q": "buy coffee beans",
-      "engine": "google_shopping"
-    },
-  ]
-}
-```
-
-Don't worry about including the `api_key` field of the SerpApi calls; the parsing engine will
-populate it for you as it reads your JSON output. You just focus on the URLs to visit and the
-parameters of the SerpApi calls to make.
-""",
-        }
+    json_sample = json.loads(json.dumps(JSON_COFFEE_SAMPLE))
+    if not serp_api_key:
+        del json_sample["serpapi_calls"]
+    instructions_str = (
+        "Okay, now emit a JSON structure to express these next steps. The JSON structure will "
+        'have a field called "urls_to_visit", containing a list of strings.\n\n'
+    )
+    if serp_api_key:
+        instructions_str += (
+            'The JSON structure will also have a field called "serpapi_calls", which will have '
+            "a list of objects that contain the parameters of SerpApi calls. Don't worry about "
+            "the `api_key` field of the SerpApi calls; the parsing engine will populate it for "
+            "you as it reads your JSON output. You just focus on the URLs to visit and the "
+            "parameters of the SerpApi calls to make.\n\n"
+        )
+    instructions_str += (
+        "Imagine the user asks for information about coffee. Then "
+        "the JSON might look something like this:\n\n"
+        "```json\n"
+        f"{json.dumps(json_sample, indent=2)}\n"
+        "```"
     )
 
     completion = openai_client.chat.completions.create(
@@ -340,6 +353,7 @@ parameters of the SerpApi calls to make.
         response_format={"type": "json_object"},
     )
     str_nextstep_json = completion.choices[0].message.content
+    nextstep_json = json.loads(str_nextstep_json)
 
     print(str_nextstep_json)
     exit(0)
@@ -430,6 +444,7 @@ def infoservant(
         pages_explored=[],
         searches_conducted=[],
         openai_client=openai_client,
+        serp_api_key=serp_api_key,
     )
 
     retval = "Hello World"
