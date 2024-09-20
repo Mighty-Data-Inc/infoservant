@@ -1,7 +1,9 @@
+import datetime
 import json
 import logging
 import openai
 import serpapi
+import time
 import webpage2content
 
 from typing import Optional, Union, List
@@ -9,11 +11,22 @@ from typing import Optional, Union, List
 LOGGER = logging.getLogger("infoservant")
 
 
+def _chronometer() -> str:
+    now = datetime.datetime.utcnow()
+    formatted_time = now.strftime("%A, %B %d, %Y, %H:%M:%S.%f")[:-3] + " GMT"
+    unix_timestamp_ms = int(time.time() * 1000)
+    result = f"CHRONOMETER: Current time is {formatted_time} (Unix millisecond timestamp: {unix_timestamp_ms})"
+    return result
+
+
 def _create_system_prompt(has_serpapi: bool = False):
     s = (
-        "You're a web browsing bot called infoservant. The user will tell you an instruction or "
-        "request that involves accessing the web. You will decide how to use your browsing "
-        "capabilities to fulfill the user's needs.\n"
+        "You're a web browsing bot called infoservant: an AI that browses text content on "
+        "the web. You can conduct deep-dives if needed. You were built for the purpose of "
+        "easily integrating intelligent web researching into any project.\n"
+        "\n"
+        "The user will tell you an instruction or request that involves accessing the web. "
+        "You will decide how to use your browsing capabilities to fulfill the user's needs.\n"
         "\n"
         "You have the following abilities:\n"
         "- Given a URL, you can read the text content of the web page. You can return these "
@@ -86,27 +99,49 @@ def _call_gpt(
 
 
 def _sanitycheck_user_command(
-    conversation: List[dict],
+    convo_intro: List[dict],
     openai_client: openai.OpenAI,
-    apology_out: Optional[List[str]] = None,
-) -> bool:
-    if type(apology_out) == list:
-        # Truncate the list without reassigning it
-        apology_out[:] = []
-    else:
-        apology_out = None
-
+) -> str:
     # Deep-copy so we don't affect the "real" conversation object.
-    conversation = json.loads(json.dumps(conversation))
+    conversation: List[dict] = json.loads(json.dumps(convo_intro))
     conversation.append(
         {
             "role": "user",
             "content": (
                 "The first thing we need to do is sanity-check the user's request/command. "
-                "It might've gotten mangled in transmission, or misparsed, or it could simply "
-                "be an inappropriate command issued by a user who doesn't understand what "
-                "you do. You need to consider:\n"
-                "- Is the command actual readable text?\n"
+                "It might've gotten mangled in transmission, or misparsed, or perhaps the "
+                "user accidentally pasted binary data into the text field or something. "
+                "As such, answer the following question: Is the user's request an intelligible "
+                "set of words or symbols that could be reasonably interpreted as either a "
+                "natural language request or a web query?\n"
+                "\n"
+                "Discuss whether or not the user's input is intelligible. Provide arguments "
+                "both pro and con. When you're done, then, on its own line, "
+                'write the word "ANSWER: ", just like that, in all caps, followed by either YES '
+                "or NO. "
+            ),
+        }
+    )
+
+    discuss_intelligible = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    discuss_intelligible = discuss_intelligible.upper()
+
+    if "ANSWER:" not in discuss_intelligible:
+        raise RuntimeError("Couldn't determine if command is intelligible")
+
+    is_intelligible = "YES" in discuss_intelligible.split("ANSWER:")[1]
+    if not is_intelligible:
+        raise ValueError("Command isn't intelligible")
+
+    conversation.append(
+        {
+            "role": "user",
+            "content": (
+                "Next, let's make sure that the user's command is appropriate "
+                "given your operational parameters as a text-browsing bot."
                 "- Can the command be interpreted as a request to access some kind of information "
                 "on the web? Maybe it's a URL, maybe it's search terms, maybe it's a question that "
                 "requires web access in order to answer?\n"
@@ -114,57 +149,209 @@ def _sanitycheck_user_command(
                 "want you to execute code, solve logic problems, perform extensive calculations, or "
                 "otherwise do things that are outside the scope of your directive as a bot that "
                 "drives a text-based web browser?\n"
+                "- Does the user seem to misunderstand what you are and what your purpose is?\n"
                 "\n"
-                "Discuss whether or not the user's command constitutes an appropriate request for "
-                "you. Provide arguments both pro and con. When you're done, then, on its own line, "
+                "Discuss whether or not the user's input is appropriate. Provide arguments "
+                "both pro and con. When you're done, then, on its own line, "
                 'write the word "ANSWER: ", just like that, in all caps, followed by either YES '
                 "or NO. "
             ),
         }
     )
 
-    discuss_sanitycheck = _call_gpt(
+    discuss_appropriate = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    discuss_appropriate = discuss_appropriate.upper()
+
+    if "ANSWER:" not in discuss_appropriate:
+        raise RuntimeError("Couldn't determine if command is appropriate")
+
+    is_appropriate = "YES" in discuss_appropriate.split("ANSWER:")[1]
+    if is_appropriate:
+        return ""
+
+    conversation.append(
+        {
+            "role": "user",
+            "content": (
+                "You've found the user's command to be inappropriate. Instead of rejecting it "
+                "outright, let's give the user the benefit of the doubt and assume that they're "
+                "just looking for information or conducting research. Think of ways to reframe, "
+                "rephrase, or reinterpret the user's request in a way that would make it "
+                "more appropriate for you. For example, if the user was asking you to perform "
+                "a complex task, then maybe what they really want is to look up instructions to "
+                "perform that task themselves?\n"
+                "\n"
+                "Brainstorm some ways to rephrase the user's request into something you can "
+                "handle. Once you've evaluated this matter, on its own line, emit the word "
+                '"REPHRASE:", just like that, in all caps, with the colon. After "REPHRASE:", '
+                'write the rephrased query, or "N/A" if you\'ve determined '
+                "that the user's inquiry can't be rephrased into something you can act on.\n"
+                "\n"
+                "Remember that you are rephrasing *for yourself*, not for the user. The user "
+                "will never see this rephrase. This rephrase is simply part of your own "
+                "chain-of-thought process.\n"
+                "\n"
+                "Don't say anything else after your rephrase. I'll be passing your output "
+                'through a parser, splitting on the string "REPHRASE:", so it\'s important '
+                "that, once you emit the rephrase, you then stay quiet."
+            ),
+        }
+    )
+
+    discuss_rephrase = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    if "REPHRASE:" not in discuss_rephrase:
+        raise RuntimeError("Couldn't rephrase command into something appropriate")
+
+    rephrase = discuss_rephrase.split("REPHRASE:", maxsplit=1)[1].strip()
+    return rephrase
+
+
+def _estimate_reasonable_time(
+    convo_intro: List[dict],
+    openai_client: openai.OpenAI,
+    seconds_permitted: int = 0,
+) -> str:
+    # Deep-copy so we don't affect the "real" conversation object.
+    conversation: List[dict] = json.loads(json.dumps(convo_intro))
+    conversation.append(
+        {
+            "role": "user",
+            "content": (
+                "Think about the complexity and intricacy of the user's command or request, and "
+                "how much detail and inference they'll want in their response. Based on these "
+                "factors, how quickly do you think the user can reasonably expect an answer? "
+                "On the one hand, if the user is expecting nothing more than the full text of "
+                "some web page as-is, then there's no reason to keep them waiting for more than "
+                "a few seconds at most. On the other hand, if they want extensive research on a "
+                "complex topic, then it's not unreasonable for them to accept that you might "
+                "need at least several minutes to browse a large number of sources and "
+                "investigate the topic in depth.\n"
+                "\n"
+                "Discuss the complexity of the user's request and formulate a reasonable "
+                "ballpark expectation for the duration that it might take you to execute this "
+                'command. When you\'re done, then, on its own line, emit the word "ANSWER:", '
+                "just like that, in all caps followed by a colon. Then, after the colon, "
+                "on the same line, write the time duration that you've come up with."
+            ),
+        }
+    )
+
+    discuss_timedur = _call_gpt(
         conversation=conversation,
         openai_client=openai_client,
     )
 
-    if "ANSWER:" not in discuss_sanitycheck:
-        if apology_out is not None:
-            apology_out.append(
-                "I'm sorry, but something went wrong while I was trying to determine the "
-                "validity of your request. Please try again."
-            )
-        return False
+    if "ANSWER:" not in discuss_timedur:
+        raise RuntimeError("Couldn't determine a reasonable duration estimate")
 
-    answer = discuss_sanitycheck.split("ANSWER:")[1].upper()
-    if "YES" in answer:
-        return True
+    timedur_est = discuss_timedur.split("ANSWER:")[1].strip()
 
-    if apology_out is not None:
-        conversation.append(
-            {
-                "role": "user",
-                "content": (
-                    "According to a parser's reading of your last message, it appears that you've "
-                    "determined that the user's command is inappropriate. Please emit an apology "
-                    "to the user explaining why you can't process their request."
-                ),
-            }
-        )
+    if "\n" in timedur_est:
+        # The LLM emitted some nonsense after the answer.
+        timedur_est = timedur_est.split("\n", 1)[0]
 
-        apology = _call_gpt(
-            conversation=conversation,
-            openai_client=openai_client,
-        )
-        apology_out.append(apology)
+    return timedur_est
 
-    return False
+
+def _research_cycle(
+    convo_intro: List[dict],
+    time_start: float,
+    pages_explored: List[dict],
+    searches_conducted: List[dict],
+    openai_client: openai.OpenAI,
+):
+    # Deep-copy so we don't affect the "real" conversation object.
+    conversation: List[dict] = json.loads(json.dumps(convo_intro))
+
+    conversation.append(
+        {
+            "role": "system",
+            "content": _chronometer(),
+        }
+    )
+
+    conversation.append(
+        {
+            "role": "system",
+            "content": (
+                "From here, list your next actions as a text-browsing web bot. "
+                "What URLs will you visit? What search queries will you conduct?\n"
+                "\n"
+                "Don't write any code or JSON yet. Write your output in plain English. "
+                "For now, we're just brainstorming."
+            ),
+        }
+    )
+
+    _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+
+    conversation.append(
+        {
+            "role": "system",
+            "content": """
+Okay, now please go ahead and emit a JSON structure that will execute these next steps. The JSON
+structure will have a "urls_to_visit" list of strings, and a "serpapi_calls" list of objects that
+contain the parameters of SerpApi calls. Imagine the user asks for information about coffee. Then
+the JSON might look something like this:
+
+```json
+{
+  "urls_to_visit": [
+    "http://www.coffee.com",
+    "https://wikipedia.com/coffee",
+    ...
+  ],
+  "serpapi_calls": [
+    {
+      "q": "history of coffee"
+    },
+    {
+      "q": "news about coffee",
+      "engine": "google_news"
+    },
+    {
+      "q": "buy coffee beans",
+      "engine": "google_shopping"
+    },
+  ]
+}
+```
+
+Don't worry about including the `api_key` field of the SerpApi calls; the parsing engine will
+populate it for you as it reads your JSON output. You just focus on the URLs to visit and the
+parameters of the SerpApi calls to make.
+""",
+        }
+    )
+
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=conversation,
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    str_nextstep_json = completion.choices[0].message.content
+
+    print(str_nextstep_json)
+    exit(0)
+
+    pass
 
 
 def infoservant(
     command: str,
     openai_client: openai.OpenAI,
     serp_api_key: str = "",
+    seconds_permitted: int = 0,
 ):
     if type(command) != str:
         raise ValueError(f"command must be a string (got {type(command)} instead)")
@@ -172,23 +359,78 @@ def infoservant(
     if not command:
         raise ValueError("Got empty string for command")
 
+    time_start = time.time()
+
     command = command.strip()
 
     has_serpapi = not not serp_api_key
-    conversation = [
+    convo_intro = [
         {"role": "system", "content": _create_system_prompt(has_serpapi=has_serpapi)},
-        {"role": "user", "content": "The user has issued the following command:"},
+        {"role": "system", "content": "The user has issued the following command:"},
         {"role": "user", "content": command},
     ]
 
-    apology_list = []
-    is_sane = _sanitycheck_user_command(
-        conversation=conversation,
+    command_rephrase = _sanitycheck_user_command(
+        convo_intro=convo_intro,
         openai_client=openai_client,
-        apology_out=apology_list,
     )
-    if not is_sane:
-        print(apology_list[0])
+    if command_rephrase:
+        command = command_rephrase
+        convo_intro[2]["content"] = command_rephrase
+
+    if seconds_permitted:
+        convo_intro.append(
+            {
+                "role": "system",
+                "content": (
+                    f"The user believes that you should be able to complete this task "
+                    f"in approximately {seconds_permitted} seconds. This time window, "
+                    "depending on how short or long it is, provides you with some "
+                    "information about how concise or detailed, respectively, the "
+                    "user would like your answer to be."
+                ),
+            }
+        )
+
+    # We add a brief exchange to establish what kind of output we're looking for.
+    convo_intro.append(
+        {
+            "role": "system",
+            "content": (
+                "Make some inferences about the user's expectations of you. "
+                "What kind of response is the user expecting? "
+                "What structure or format of reply would make the user satisfied "
+                "with the answer? What's too little, and what's too much?"
+            ),
+        }
+    )
+    _call_gpt(
+        conversation=convo_intro,
+        openai_client=openai_client,
+    )
+
+    timedur_est = _estimate_reasonable_time(
+        convo_intro=convo_intro,
+        openai_client=openai_client,
+    )
+    convo_intro.append(
+        {
+            "role": "assistant",
+            "content": (
+                "Given the scope of the user's request, here is what I believe to "
+                "be a reasonable time allotment for spending on this problem: "
+                f"{timedur_est}"
+            ),
+        }
+    )
+
+    _research_cycle(
+        convo_intro=convo_intro,
+        time_start=time_start,
+        pages_explored=[],
+        searches_conducted=[],
+        openai_client=openai_client,
+    )
 
     retval = "Hello World"
     return retval
@@ -248,11 +490,25 @@ def main():
         "-c",
         "--command",
         help=(
-            "The instructions to resolve via web browsing. These are typically a short plain-English "
-            "statement of information to find, a question to answer, or even just the URL of a "
-            "web page to retrieve."
+            "The instructions to resolve via web browsing. These are typically a short "
+            "plain-English statement of information to find, a question to answer, or "
+            "even just the URL of a web page to retrieve."
         ),
         type=str,
+    )
+
+    parser.add_argument(
+        "-t",
+        "--time",
+        help=(
+            "How much time to grant the bot for executing this command, in seconds. "
+            "Once this time duration has been exceeded, the bot compiles whatever "
+            "information it's collected so far, and writes a final report. This means that the "
+            "bot will likely exceed this exact execution time by a margin proportional to "
+            "the time taken to write a final report, usually a few seconds to a minute."
+        ),
+        type=int,
+        default=0,
     )
 
     parser.add_argument(
@@ -286,6 +542,7 @@ def main():
         command=command,
         openai_client=openai_client,
         serp_api_key=serpapi_key,
+        seconds_permitted=args.time,
     )
     print(s)
 

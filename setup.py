@@ -13,7 +13,7 @@ setup(
     version=version,
     author="Mikhail Voloshin",
     author_email="mvol@mightydatainc.com",
-    description="An AI that browses text content on the web. Easily integrate intelligent web surfing into any project.",
+    description="An AI that browses text content on the web. Can conduct deep-dives. Easily integrate intelligent web researching into any project.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/Mighty-Data-Inc/infoservant",
