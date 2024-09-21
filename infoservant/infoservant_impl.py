@@ -61,8 +61,21 @@ def _create_system_prompt(has_serpapi: bool = False):
         "- See text that gets populated through AJAX\n"
         "- Browse the deep web\n"
         "- Many other things\n"
+        "\n"
         "Basically, what you **can** do is read publicly available articles, "
-        'official "front page" web content, and other "web 1.0" tasks.'
+        'official "front page" web content, and other "web 1.0" tasks.\n'
+        "\n"
+        "**Important**: Do not inject your own beliefs, opinions, or prejudices into the "
+        "search process or the formulation of the final response! You're being asked to "
+        "report on what the web results say, *not* on what you yourself think you know. "
+        "It doesn't matter if you find the results to be offensive, or lying, or misinformation/"
+        "disinformation. Such decisions are not up to you during this operation, "
+        "and it is not your job to pass judgment. The user is conducting research; "
+        "you can assume that they have already taken warnings into account, are already "
+        "sufficiently web-savvy enough to take answers with a grain of salt, and they need to "
+        "see the content on its own merits, without policing. Just give them the information "
+        "they need, and trust them to be smart enough to understand the tenuous and unreliable "
+        "nature of web-based information accordingly."
     )
     return s
 
@@ -271,64 +284,77 @@ def _estimate_reasonable_time(
     return timedur_est
 
 
+def _run_serpapi_research_task(
+    task: dict,
+) -> bool:
+    serpapi_params = task.get("params")
+    if not serpapi_params:
+        task["success"] = False
+        task["error"] = "SerpApi params not provided"
+        return False
+    try:
+        search = serpapi.GoogleSearch(serpapi_params)
+        result = search.get_dict()
+    except Exception as ex:
+        task["success"] = False
+        task["error"] = f"Exception while performing SerpApi query: {ex}"
+        return False
+    CLEANUP_FIELDS = [
+        "pagination",
+        "serpapi_pagination",
+        "filters",
+        "search_metadata",
+        "search_parameters_xxxxxx",
+        "search_information",
+        "knowledge_graph",
+        "inline_videos",
+    ]
+    for field in CLEANUP_FIELDS:
+        if field in result:
+            del result[field]
+    task["success"] = True
+    task["result"] = json.dumps(result, indent=2)
+    return True
+
+
+def _run_url_research_task(
+    task: dict,
+    openai_client: openai.OpenAI,
+) -> bool:
+    url = task.get("url")
+    if not url:
+        task["success"] = False
+        task["error"] = "URL not provided"
+        return False
+    try:
+        result = webpage2content.webpage2content(
+            url=url,
+            openai_client=openai_client,
+        )
+    except Exception as ex:
+        task["success"] = False
+        task["error"] = f"Exception while fetching url {url}: {ex}"
+        return False
+    if not result:
+        task["success"] = False
+        task["error"] = f"Fetch of {url} produced empty/invalid result"
+        return False
+    task["success"] = True
+    task["result"] = result
+    return True
+
+
 def _run_one_research_task(
     task: dict,
     openai_client: openai.OpenAI,
-):
+) -> bool:
     task_type = task.get("task_type")
 
     if task_type == "url":
-        url = task.get("url")
-        if not url:
-            task["success"] = False
-            task["error"] = "URL not provided"
-            return False
-        try:
-            result = webpage2content.webpage2content(
-                url=url,
-                openai_client=openai_client,
-            )
-        except Exception as ex:
-            task["success"] = False
-            task["error"] = f"Exception while fetching url {url}: {ex}"
-            return False
-        if not result:
-            task["success"] = False
-            task["error"] = f"Fetch of {url} produced empty/invalid result"
-            return False
-        task["success"] = True
-        task["result"] = result
-        return True
+        return _run_url_research_task(task, openai_client)
 
-    if task_type == "serpapi_call":
-        serpapi_params = task.get("params")
-        if not serpapi_params:
-            task["success"] = False
-            task["error"] = "SerpApi params not provided"
-            return False
-        try:
-            search = serpapi.GoogleSearch(serpapi_params)
-            result = search.get_dict()
-        except Exception as ex:
-            task["success"] = False
-            task["error"] = f"Exception while performing SerpApi query: {ex}"
-            return False
-        CLEANUP_FIELDS = [
-            "pagination",
-            "serpapi_pagination",
-            "filters",
-            "search_metadata",
-            "search_parameters_xxxxxx",
-            "search_information",
-            "knowledge_graph",
-            "inline_videos",
-        ]
-        for field in CLEANUP_FIELDS:
-            if field in result:
-                del result[field]
-        task["success"] = True
-        task["result"] = json.dumps(result, indent=2)
-        return True
+    elif task_type == "serpapi_call":
+        return _run_serpapi_research_task(task)
 
     return False
 
@@ -364,19 +390,12 @@ def _task_results_to_conversation_messages(tasks: List[dict]):
     return messages
 
 
-def _summarize_progress_so_far(
-    conversation: List[dict],
-    openai_client: openai.OpenAI,
-):
-    conversation.append({"role": "system", "content": ("Write a ")})
-
-
 def _research_cycle(
     convo_intro: List[dict],
+    user_command: str,
     time_start: float,
-    pages_explored: List[dict],
-    searches_conducted: List[dict],
     openai_client: openai.OpenAI,
+    research_so_far: str = "",
     serp_api_key: str = "",
 ):
     # Deep-copy so we don't affect the "real" conversation object.
@@ -482,6 +501,7 @@ def _research_cycle(
 
     # TODO: Run these concurrently.
     for task in tasks:
+        print("Running research task: ", json.dumps(task))
         _run_one_research_task(
             task=task,
             openai_client=openai_client,
@@ -506,16 +526,75 @@ def _research_cycle(
             ),
         }
     )
-    _call_gpt(
+    research_so_far_next = _call_gpt(
         conversation=conversation,
         openai_client=openai_client,
     )
-    print(conversation[-1]["content"])
+    print(research_so_far_next)
 
-    print(json.dumps(result_msgs, indent=2))
-    exit(0)
+    conversation.append(
+        {
+            "role": "system",
+            "content": (
+                "Are we finished? Have we gathered enough information to complete the "
+                "user's original inquiry or request? Have we perhaps determined that we won't "
+                "be able to fulfill the request, and that further searching is fruitless? "
+                "Have we simply run out of time? Or, should we run another loop of "
+                "browsing to go visit more web pages (and possibly conduct more searches)?\n"
+                "\n"
+                "Discuss whether or not we should loop for more information, or whether we "
+                "should now return a result to the user.\n"
+                "\n"
+                "When you're done deliberating on the topic, at the end of your discussion, "
+                "emit one of two result tokens: either RETURN_USER_RESULTS or CONTINUE_BROWSING, "
+                "both written just like that, in all caps, with underscores. If you reply with "
+                "RETURN_USER_RESULTS, you'll next be taken to an interface where you can write "
+                "the results for the user. If you answer CONTINUE_BROWSING, we'll then prompt "
+                "you for another set of URLs (and possibly search parameters) to gather more "
+                "information."
+            ),
+        }
+    )
+    discuss_returnresults = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    if "CONTINUE_BROWSING" in discuss_returnresults:
+        retval = {
+            "completed": False,
+            "research_so_far": research_so_far_next,
+        }
+        return retval
 
-    pass
+    conversation.append(
+        {
+            "role": "system",
+            "content": (
+                "Alright. You have now reached the end of your chain-of-thought sequence. From "
+                "this point onward, you will be speaking directly to the user. The user's "
+                "request will be presented to you once more, to re-establish context if "
+                "you need it. Compose a response to the user, in the format you've inferred "
+                "they want and with a tone and verbiage that you believe they expect. "
+                "Incorporate the information you've gathered above, being sure to cite "
+                "specific URLs for your source material where appropriate."
+            ),
+        }
+    )
+    conversation.append(
+        {
+            "role": "user",
+            "content": user_command,
+        }
+    )
+    answer = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+    retval = {
+        "completed": True,
+        "answer": answer,
+    }
+    return retval
 
 
 def infoservant(
@@ -595,17 +674,28 @@ def infoservant(
         }
     )
 
-    _research_cycle(
-        convo_intro=convo_intro,
-        time_start=time_start,
-        pages_explored=[],
-        searches_conducted=[],
-        openai_client=openai_client,
-        serp_api_key=serp_api_key,
-    )
+    research_so_far = ""
+    answer = ""
+    while True:
+        rescycle_output = _research_cycle(
+            convo_intro=convo_intro,
+            user_command=command,
+            research_so_far=research_so_far,
+            time_start=time_start,
+            openai_client=openai_client,
+            serp_api_key=serp_api_key,
+        )
 
-    retval = "Hello World"
-    return retval
+        if rescycle_output["completed"]:
+            answer = rescycle_output["answer"]
+            break
+
+        research_so_far = rescycle_output["research_so_far"]
+        print(research_so_far)
+
+    print("=====================")
+    print(answer)
+    return answer
 
 
 def main():
