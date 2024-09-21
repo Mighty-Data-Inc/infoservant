@@ -1,3 +1,4 @@
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -327,7 +328,7 @@ def _run_url_research_task(
         task["error"] = "URL not provided"
         return False
     try:
-        result = webpage2content.webpage2content(
+        pagecontents = webpage2content.webpage2content(
             url=url,
             openai_client=openai_client,
         )
@@ -335,10 +336,51 @@ def _run_url_research_task(
         task["success"] = False
         task["error"] = f"Exception while fetching url {url}: {ex}"
         return False
-    if not result:
+    if not pagecontents:
         task["success"] = False
         task["error"] = f"Fetch of {url} produced empty/invalid result"
         return False
+
+    conversation = [
+        {
+            "role": "system",
+            "content": (
+                f"You just browsed a web page at the URL: {url}\n"
+                "\n"
+                "I'll show you its contents. I'd like you to write an evaluation in which you "
+                "discuss the following matters:\n"
+                "- Does this page seem authoritative on this topic?\n"
+                "- Does anything on this page contradict your current beliefs, opinions, or biases?\n"
+                "- Do you consider anything on this page to be misinformation, disinformation, or "
+                "propaganda? Bear in mind that labeling the page's contents in this manner may "
+                "indicate your own biases.\n"
+                '- Analyze this content using the so-called "rule of embarrasment". Is there any '
+                "information on here that contradicts the objectives or beliefs of the page's writer "
+                "or publisher? If so, then it's likely that that information is true.\n"
+                "- Analyze this content for internal logical consistency. Does the page contradict "
+                "itself? Does it present so-called supporting evidence that doesn't actually support "
+                "its conclusions?\n"
+                "- Did you find anything surprising or counterintuitive? List a few key facts presented"
+                "on this page that you wouldn't have come up with on your own.\n"
+            ),
+        },
+        {
+            "role": "user",
+            "content": pagecontents,
+        },
+    ]
+    discuss_truthiness = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+
+    result = (
+        f"{pagecontents}"
+        "\n\n\n---\n\n\n"
+        "Discussion of the truthiness of the above web page contents:\n"
+        f"{discuss_truthiness}"
+    )
+
     task["success"] = True
     task["result"] = result
     return True
@@ -413,6 +455,14 @@ def _research_cycle(
             ),
         }
     )
+
+    if research_so_far:
+        conversation.append(
+            {
+                "role": "system",
+                "content": f"Here's what you've learned so far:\n\n{research_so_far}",
+            }
+        )
 
     s = ""
     if serp_api_key:
@@ -499,13 +549,13 @@ def _research_cycle(
             }
             tasks.append(task)
 
-    # TODO: Run these concurrently.
-    for task in tasks:
-        print("Running research task: ", json.dumps(task))
-        _run_one_research_task(
-            task=task,
-            openai_client=openai_client,
-        )
+    # Run these concurrently.
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [
+            executor.submit(_run_one_research_task, task, openai_client)
+            for task in tasks
+        ]
+        futures_completed = concurrent.futures.as_completed(futures)
 
     result_msgs = _task_results_to_conversation_messages(tasks)
     conversation.extend(result_msgs)
@@ -530,7 +580,6 @@ def _research_cycle(
         conversation=conversation,
         openai_client=openai_client,
     )
-    print(research_so_far_next)
 
     conversation.append(
         {
@@ -691,10 +740,7 @@ def infoservant(
             break
 
         research_so_far = rescycle_output["research_so_far"]
-        print(research_so_far)
 
-    print("=====================")
-    print(answer)
     return answer
 
 
