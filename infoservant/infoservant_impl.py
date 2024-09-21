@@ -432,6 +432,70 @@ def _task_results_to_conversation_messages(tasks: List[dict]):
     return messages
 
 
+def _remove_obnoxious_postscript(
+    essay: str,
+    openai_client: openai.OpenAI,
+):
+    conversation = [
+        {
+            "role": "system",
+            "content": (
+                "Read the following essay, report, or long-form message submitted by a writer on "
+                "a message board. This writer has an incredibly annoying habit of ending every "
+                "message with a chipper, polite, friendly invitation to ask for more questions "
+                "or search for more information. This is insanely irritating because this writer "
+                "is writing on an interactive forum, so people already know darn well that they "
+                "can ask for more information. I mean, imagine how infuriating it would "
+                "be if you were trying to have a conversation with someone, and every time they "
+                "said anything, they immediately followed it with, \"Let me know if you'd like "
+                'me to keep talking!"!\n'
+                "\n"
+                "Part of this same habit is the tendency to recap lists or restate conclusions. "
+                "For example, someone will ask him to list a set of links; he'll list the links, "
+                'and then announce, "There\'s the list of links you asked for!". Um, no sh*t, '
+                "Sherlock, we can see them right there in front of us.\n"
+                "\n"
+                "Did the writer exhibit this obnoxious habit in this report? In fact, does the "
+                "end of the report provide any valuable information or meaningful insight in "
+                "any way, or is it just the writer being needlessly wordy?\n"
+                "\n"
+                "If he has, then I'll need your help in editing his writing to remove these "
+                "obnoxious endings. First, deliberate and discuss what can be removed. Then, "
+                "when you're done, start a new line with the word REMOVE:, written just "
+                "like that, in all caps with a colon, followed by the exact text to remove. "
+                "You can specify multiple things to remove in this manner, if you wish.\n"
+                "\n"
+                "Sometimes, he'll do this at the beginning of his messages as well. For example, "
+                "he'll announce, \"Here's a list of resources!\", followed by a list of links. "
+                "Bro, just give us the list of links, don't make a big freaking production out "
+                "of it. Any such obnoxiousness at the beginning of the message should be removed "
+                "with a REMOVE: command, just like a the end.\n"
+            ),
+        },
+        {
+            "role": "user",
+            "content": essay,
+        },
+    ]
+    discuss_obnoxiousend = _call_gpt(
+        conversation=conversation,
+        openai_client=openai_client,
+    )
+
+    lines = discuss_obnoxiousend.splitlines()
+    for line in lines:
+        if not line.startswith("REMOVE:"):
+            continue
+        line = line[len("REMOVE:") :]
+        line = line.strip()
+        if line.startswith('"') and line.endswith('"'):
+            line = line[1:-1].strip()
+        essay = essay.replace(line, "")
+
+    essay = essay.strip()
+    return essay
+
+
 def _research_cycle(
     convo_intro: List[dict],
     user_command: str,
@@ -741,6 +805,15 @@ def infoservant(
 
         research_so_far = rescycle_output["research_so_far"]
 
+    answer_before = answer
+    while True:
+        answer = _remove_obnoxious_postscript(
+            essay=answer,
+            openai_client=openai_client,
+        )
+        if answer == answer_before:
+            break
+        answer_before = answer
     return answer
 
 
