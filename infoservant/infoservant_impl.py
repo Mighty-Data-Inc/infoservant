@@ -902,7 +902,11 @@ def main():
     args = parser.parse_args()
 
     if args.log_level:
-        log_level = logging.getLevelName(args.log_level)
+        log_level_name = args.log_level.upper()
+        log_level = logging.getLevelName(log_level_name)
+        logging.basicConfig(
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
         LOGGER.setLevel(log_level)
 
     dotenv.load_dotenv()
